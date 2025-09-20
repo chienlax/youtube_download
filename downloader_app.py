@@ -1,26 +1,38 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, scrolledtext
 import subprocess
 import threading
 import json
 import re
 import queue
+import os
+from PIL import Image, ImageTk
+from io import BytesIO
+import urllib.request
+import time
 
 class YTDLP_GUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Video Downloader v2.0")
-        self.root.geometry("700x650")  # Increased height for subtitle section
+        self.root.geometry("900x700")  # Increased size for channel mode
 
         # --- URL and Fetch Section ---
-        self.url_label = ttk.Label(root, text="Video URL:")
+        self.url_label = ttk.Label(root, text="Video/Channel URL:")
         self.url_label.pack(pady=5)
 
         self.url_entry = ttk.Entry(root, width=80)
         self.url_entry.pack(pady=5, padx=10)
 
-        self.fetch_button = ttk.Button(root, text="Fetch Formats", command=self.start_fetch_formats)
-        self.fetch_button.pack(pady=10)
+        # --- Button Frame ---
+        self.button_frame = ttk.Frame(root)
+        self.button_frame.pack(pady=5)
+        
+        self.fetch_button = ttk.Button(self.button_frame, text="Fetch Formats", command=self.start_fetch_formats)
+        self.fetch_button.pack(side="left", padx=5)
+        
+        self.channel_fetch_button = ttk.Button(self.button_frame, text="Fetch Channel Videos", command=self.start_fetch_channel)
+        self.channel_fetch_button.pack(side="left", padx=5)
 
         # --- Download Mode Selection ---
         self.mode_frame = ttk.LabelFrame(root, text="Download Mode")
@@ -33,9 +45,14 @@ class YTDLP_GUI:
         self.simple_mode_radio.pack(side="left", padx=10, pady=5)
         
         self.advanced_mode_radio = ttk.Radiobutton(
-            self.mode_frame, text="Advanced Mode (Download Components Separately)", 
+            self.mode_frame, text="Advanced Mode (Download Components)", 
             variable=self.mode_var, value="advanced", command=self.toggle_mode)
         self.advanced_mode_radio.pack(side="left", padx=10, pady=5)
+        
+        self.channel_mode_radio = ttk.Radiobutton(
+            self.mode_frame, text="Channel Mode (Batch Download)", 
+            variable=self.mode_var, value="channel", command=self.toggle_mode)
+        self.channel_mode_radio.pack(side="left", padx=10, pady=5)
 
         # --- Format Selection ---
         self.notebook = ttk.Notebook(root)
@@ -92,6 +109,57 @@ class YTDLP_GUI:
                                            text="No subtitles available. Select multiple with Ctrl/Shift.")
         self.subtitle_info_label.pack(pady=2)
         
+        # Channel mode tab
+        self.channel_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.channel_frame, text="Channel Videos")
+        
+        # Channel info frame
+        self.channel_info_frame = ttk.Frame(self.channel_frame)
+        self.channel_info_frame.pack(fill="x", pady=5, padx=10)
+        
+        self.channel_name_label = ttk.Label(self.channel_info_frame, text="Channel: Not loaded")
+        self.channel_name_label.pack(side="left", padx=5)
+        
+        self.video_count_label = ttk.Label(self.channel_info_frame, text="Videos: 0")
+        self.video_count_label.pack(side="left", padx=5)
+        
+        # Channel options frame
+        self.channel_options_frame = ttk.Frame(self.channel_frame)
+        self.channel_options_frame.pack(fill="x", pady=5, padx=10)
+        
+        self.format_label = ttk.Label(self.channel_options_frame, text="Download format:")
+        self.format_label.pack(side="left", padx=5)
+        
+        self.format_var = tk.StringVar(value="best[height<=720]")
+        self.format_combo = ttk.Combobox(self.channel_options_frame, textvariable=self.format_var, width=30)
+        self.format_combo['values'] = [
+            "best", "bestvideo+bestaudio", "best[height<=720]", 
+            "best[height<=480]", "worst"
+        ]
+        self.format_combo.pack(side="left", padx=5)
+        
+        self.select_all_var = tk.BooleanVar()
+        self.select_all_check = ttk.Checkbutton(
+            self.channel_options_frame, text="Select All", 
+            variable=self.select_all_var, command=self.toggle_select_all)
+        self.select_all_check.pack(side="right", padx=5)
+        
+        # Create a canvas with scrollbar for the videos
+        self.videos_canvas_frame = ttk.Frame(self.channel_frame)
+        self.videos_canvas_frame.pack(fill="both", expand=True, pady=5, padx=10)
+        
+        self.videos_canvas = tk.Canvas(self.videos_canvas_frame, borderwidth=0)
+        self.videos_scrollbar = ttk.Scrollbar(
+            self.videos_canvas_frame, orient="vertical", command=self.videos_canvas.yview)
+        self.videos_scrollbar.pack(side="right", fill="y")
+        
+        self.videos_canvas.pack(side="left", fill="both", expand=True)
+        self.videos_canvas.configure(yscrollcommand=self.videos_scrollbar.set)
+        
+        self.videos_frame = ttk.Frame(self.videos_canvas)
+        self.videos_canvas.create_window((0, 0), window=self.videos_frame, anchor="nw", tags="self.videos_frame")
+        self.videos_frame.bind("<Configure>", self.on_frame_configure)
+        
         # --- Additional Download Options ---
         self.options_frame = ttk.Frame(root)
         self.options_frame.pack(pady=5)
@@ -129,17 +197,30 @@ class YTDLP_GUI:
         self.message_queue = queue.Queue()
         self.check_queue()
         
-        # Initially hide Advanced tab
+        # Channel mode data
+        self.channel_videos = []  # List of videos in the channel
+        self.selected_videos = []  # List of selected video indices
+        self.video_checkboxes = []  # List of checkbox variables
+        self.video_widgets = []  # References to video widgets for cleanup
+        
+        # Initially hide Advanced and Channel tabs
         self.notebook.hide(1)
+        self.notebook.hide(2)
 
     def toggle_mode(self):
-        if self.mode_var.get() == "simple":
+        mode = self.mode_var.get()
+        # Hide all tabs
+        for i in range(self.notebook.index("end")):
+            self.notebook.hide(i)
+        
+        # Show the selected tab
+        if mode == "simple":
             self.notebook.select(0)
-            self.notebook.hide(1)
-        else:
+        elif mode == "advanced":
             self.notebook.select(1)
-            self.notebook.hide(0)
-            
+        elif mode == "channel":
+            self.notebook.select(2)
+
     def toggle_subtitle_selection(self):
         # Enable or disable subtitle selection in advanced mode based on checkbox
         if self.mode_var.get() == "advanced":
@@ -148,6 +229,17 @@ class YTDLP_GUI:
             else:
                 self.subtitle_listbox.config(state="disabled")
 
+    def toggle_select_all(self):
+        select_all = self.select_all_var.get()
+        for i, var in enumerate(self.video_checkboxes):
+            var.set(select_all)
+            if select_all:
+                if i not in self.selected_videos:
+                    self.selected_videos.append(i)
+            else:
+                if i in self.selected_videos:
+                    self.selected_videos.remove(i)
+
     def check_queue(self):
         try:
             message = self.message_queue.get(block=False)
@@ -155,6 +247,15 @@ class YTDLP_GUI:
             if msg_type == "formats":
                 # Now receives formats, subtitles and processes them
                 self.update_formats_list(message[1], message[2])
+            elif msg_type == "channel_info":
+                # Handle channel information
+                self.update_channel_info(message[1])
+            elif msg_type == "channel_videos":
+                # Handle channel videos list
+                self.update_channel_videos(message[1])
+            elif msg_type == "channel_thumbnail":
+                # Handle a channel video thumbnail
+                self.update_video_thumbnail(message[1], message[2])
             elif msg_type == "progress":
                 self.update_progress(message[1])
             elif msg_type == "status":
@@ -193,10 +294,220 @@ class YTDLP_GUI:
         
         self.update_status("Fetching info...")
         self.fetch_button.config(state="disabled")
+        self.channel_fetch_button.config(state="disabled")
 
         thread = threading.Thread(target=self.fetch_formats_thread, args=(url,))
         thread.daemon = True
         thread.start()
+        
+    def start_fetch_channel(self):
+        url = self.url_entry.get()
+        if not url:
+            messagebox.showwarning("Warning", "Please enter a channel URL.")
+            return
+            
+        # Clear previous channel videos
+        self.clear_channel_videos()
+        self.channel_videos = []
+        self.selected_videos = []
+        self.video_checkboxes = []
+        
+        # Switch to channel mode
+        self.mode_var.set("channel")
+        self.toggle_mode()
+        
+        # Update UI state
+        self.update_status("Fetching channel information...")
+        self.fetch_button.config(state="disabled")
+        self.channel_fetch_button.config(state="disabled")
+        self.download_button.config(state="disabled")
+        
+        # Start thread to fetch channel info
+        thread = threading.Thread(target=self.fetch_channel_thread, args=(url,))
+        thread.daemon = True
+        thread.start()
+
+    def fetch_channel_thread(self, url):
+        try:
+            # First get basic channel info
+            command = ["yt-dlp.exe", "--flat-playlist", "--dump-single-json", url]
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            stdout, stderr = process.communicate()
+
+            if process.returncode != 0:
+                raise Exception(f"yt-dlp error: {stderr}")
+
+            channel_info = json.loads(stdout)
+            self.message_queue.put(("channel_info", channel_info))
+            self.message_queue.put(("status", "Fetching videos from channel..."))
+            
+            # Get detailed video information
+            command = [
+                "yt-dlp.exe", 
+                "--flat-playlist", 
+                "--dump-json",
+                "--playlist-items", "1-30",  # Limit to 30 videos for performance
+                url
+            ]
+            
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            
+            videos = []
+            for line in process.stdout:
+                try:
+                    video_info = json.loads(line)
+                    videos.append(video_info)
+                except json.JSONDecodeError:
+                    continue
+                    
+            process.wait()
+            if videos:
+                self.message_queue.put(("channel_videos", videos))
+                
+                # Now fetch thumbnails for each video
+                for i, video in enumerate(videos[:30]):  # Limit thumbnail fetching
+                    try:
+                        if 'thumbnail' in video and video['thumbnail']:
+                            thumbnail_url = video['thumbnail']
+                            with urllib.request.urlopen(thumbnail_url) as response:
+                                thumbnail_data = response.read()
+                                self.message_queue.put(("channel_thumbnail", (i, thumbnail_data)))
+                    except Exception as e:
+                        print(f"Error fetching thumbnail for video {i}: {e}")
+                        
+            else:
+                raise Exception("No videos found in this channel")
+                
+        except Exception as e:
+            self.message_queue.put(("error", str(e)))
+        finally:
+            self.message_queue.put(("status", "Ready"))
+            self.message_queue.put(("progress", 100))
+
+    def update_channel_info(self, info):
+        """Update the channel information display"""
+        channel_title = info.get('channel', info.get('uploader', 'Unknown Channel'))
+        video_count = info.get('playlist_count', 0)
+        
+        self.channel_name_label.config(text=f"Channel: {channel_title}")
+        self.video_count_label.config(text=f"Videos: {video_count}")
+
+    def update_channel_videos(self, videos):
+        """Display the list of videos from the channel"""
+        self.channel_videos = videos
+        self.video_checkboxes = []
+        
+        # Create a video entry for each video
+        for i, video in enumerate(videos):
+            frame = ttk.Frame(self.videos_frame)
+            frame.pack(fill="x", pady=5, padx=5)
+            self.video_widgets.append(frame)
+            
+            # Create a thumbnail placeholder
+            thumbnail_frame = ttk.LabelFrame(frame, width=120, height=90)
+            thumbnail_frame.pack(side="left", padx=5)
+            thumbnail_frame.pack_propagate(False)
+            
+            thumbnail_label = ttk.Label(thumbnail_frame, text="Loading...")
+            thumbnail_label.pack(fill="both", expand=True)
+            self.video_widgets.append(thumbnail_label)
+            
+            # Create video info
+            info_frame = ttk.Frame(frame)
+            info_frame.pack(side="left", fill="both", expand=True, padx=5)
+            self.video_widgets.append(info_frame)
+            
+            title = video.get('title', 'Unknown Title')
+            uploader = video.get('uploader', 'Unknown Uploader')
+            duration = video.get('duration', 0)
+            duration_str = self.format_duration(duration)
+            
+            title_label = ttk.Label(info_frame, text=title, wraplength=600, font=('TkDefaultFont', 10, 'bold'))
+            title_label.pack(anchor="w")
+            self.video_widgets.append(title_label)
+            
+            uploader_label = ttk.Label(info_frame, text=f"By: {uploader}")
+            uploader_label.pack(anchor="w")
+            self.video_widgets.append(uploader_label)
+            
+            duration_label = ttk.Label(info_frame, text=f"Duration: {duration_str}")
+            duration_label.pack(anchor="w")
+            self.video_widgets.append(duration_label)
+            
+            # Checkbox for selection
+            var = tk.BooleanVar(value=False)
+            self.video_checkboxes.append(var)
+            
+            checkbox = ttk.Checkbutton(frame, variable=var, text="Select", 
+                                      command=lambda idx=i: self.toggle_video_selection(idx))
+            checkbox.pack(side="right", padx=10)
+            self.video_widgets.append(checkbox)
+        
+        # Update UI state
+        self.fetch_button.config(state="normal")
+        self.channel_fetch_button.config(state="normal")
+        self.download_button.config(state="normal")
+        self.update_status(f"Loaded {len(videos)} videos from channel")
+
+    def update_video_thumbnail(self, data):
+        """Update a video's thumbnail with the downloaded image"""
+        index, thumbnail_data = data
+        try:
+            # Each video has multiple widgets, find the thumbnail label
+            widget_index = index * 7 + 1  # Adjust based on how many widgets per video
+            
+            if widget_index < len(self.video_widgets):
+                thumbnail_label = self.video_widgets[widget_index]
+                image = Image.open(BytesIO(thumbnail_data))
+                image = image.resize((120, 90), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(image)
+                
+                # Keep a reference to prevent garbage collection
+                thumbnail_label.image = photo
+                thumbnail_label.config(image=photo, text="")
+        except Exception as e:
+            print(f"Error updating thumbnail for video {index}: {e}")
+
+    def toggle_video_selection(self, index):
+        """Handle toggling a video's selection state"""
+        is_selected = self.video_checkboxes[index].get()
+        
+        if is_selected and index not in self.selected_videos:
+            self.selected_videos.append(index)
+        elif not is_selected and index in self.selected_videos:
+            self.selected_videos.remove(index)
+
+    def clear_channel_videos(self):
+        """Remove all video widgets from the channel display"""
+        for widget in self.video_widgets:
+            widget.destroy()
+        self.video_widgets = []
+        
+        # Reset the canvas scroll region
+        self.videos_canvas.configure(scrollregion=(0, 0, 0, 0))
+
+    def on_frame_configure(self, event):
+        """Update the scroll region when the videos frame changes size"""
+        self.videos_canvas.configure(scrollregion=self.videos_canvas.bbox("all"))
+
+    def format_duration(self, seconds):
+        """Format seconds into a readable duration string"""
+        if not seconds:
+            return "Unknown duration"
+            
+        hours, remainder = divmod(int(seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes}:{seconds:02d}"
 
     def fetch_formats_thread(self, url):
         try:
@@ -237,6 +548,8 @@ class YTDLP_GUI:
             self.message_queue.put(("error", str(e)))
         finally:
             self.message_queue.put(("status", "Ready"))
+            self.fetch_button.config(state="normal")
+            self.channel_fetch_button.config(state="normal")
             
     def parse_subtitle_info(self, output):
         """Parse the subtitle information from yt-dlp --list-subs output"""
@@ -355,14 +668,15 @@ class YTDLP_GUI:
         else:
             self.subtitle_checkbox.config(state="disabled", text="Download Subtitles (None found)")
             self.subtitle_info_label.config(text="No subtitles available.")
-            
-        self.fetch_button.config(state="normal")
 
     def start_download(self):
-        if self.mode_var.get() == "simple":
+        mode = self.mode_var.get()
+        if mode == "simple":
             self.start_simple_download()
-        else:
+        elif mode == "advanced":
             self.start_advanced_download()
+        elif mode == "channel":
+            self.start_channel_download()
             
     def start_simple_download(self):
         selection_index = self.formats_listbox.curselection()
@@ -388,6 +702,7 @@ class YTDLP_GUI:
         self.progress['value'] = 0
         self.download_button.config(state="disabled")
         self.fetch_button.config(state="disabled")
+        self.channel_fetch_button.config(state="disabled")
 
         command = [
             "yt-dlp.exe",
@@ -461,12 +776,114 @@ class YTDLP_GUI:
         self.progress['value'] = 0
         self.download_button.config(state="disabled")
         self.fetch_button.config(state="disabled")
+        self.channel_fetch_button.config(state="disabled")
         
         # Start download thread
         thread = threading.Thread(target=self.download_components_thread, 
                                   args=(url, download_tasks, save_dir))
         thread.daemon = True
         thread.start()
+        
+    def start_channel_download(self):
+        if not self.selected_videos:
+            messagebox.showwarning("Warning", "Please select at least one video to download.")
+            return
+        
+        # Ask for directory to save files
+        save_dir = filedialog.askdirectory(title="Select directory to save videos")
+        if not save_dir:
+            self.update_status("Download cancelled.")
+            return
+        
+        # Get the selected format
+        format_selector = self.format_var.get()
+        
+        # Prepare the download tasks - a list of video URLs
+        download_tasks = []
+        for index in self.selected_videos:
+            if index < len(self.channel_videos):
+                video = self.channel_videos[index]
+                video_url = video.get('url') or video.get('webpage_url')
+                if video_url:
+                    download_tasks.append(video_url)
+        
+        if not download_tasks:
+            messagebox.showwarning("Warning", "Could not get URLs for selected videos.")
+            return
+            
+        # Disable UI during download
+        self.progress['value'] = 0
+        self.download_button.config(state="disabled")
+        self.fetch_button.config(state="disabled")
+        self.channel_fetch_button.config(state="disabled")
+        
+        # Start download thread
+        thread = threading.Thread(target=self.download_channel_videos_thread, 
+                                  args=(download_tasks, format_selector, save_dir))
+        thread.daemon = True
+        thread.start()
+        
+    def download_channel_videos_thread(self, video_urls, format_selector, save_dir):
+        try:
+            total_videos = len(video_urls)
+            completed_videos = 0
+            
+            for i, url in enumerate(video_urls):
+                self.message_queue.put(("status", f"Downloading video {i+1} of {total_videos}: {url}"))
+                self.message_queue.put(("progress", (i / total_videos) * 100))
+                
+                # Build command for this video
+                command = [
+                    "yt-dlp.exe",
+                    "-f", format_selector,
+                    "-o", f"{save_dir}/%(title)s.%(ext)s",
+                    "--progress",
+                    url
+                ]
+                
+                if self.thumbnail_var.get():
+                    command.append("--write-thumbnail")
+                    
+                if self.subtitle_var.get():
+                    command.append("--write-subs")
+                    command.append("--write-auto-subs")
+                
+                # Execute download command
+                process = subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, bufsize=1, universal_newlines=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                
+                # Monitor process
+                for line in process.stdout:
+                    self.message_queue.put(("status", line.strip()))
+                    match = re.search(r"\[download\]\s+([0-9.]+)%", line)
+                    if match:
+                        percentage = float(match.group(1))
+                        video_progress = (i + percentage / 100) / total_videos * 100
+                        self.message_queue.put(("progress", video_progress))
+                
+                process.wait()
+                if process.returncode != 0:
+                    stderr = process.stderr.read()
+                    self.message_queue.put(("status", f"Error downloading video {i+1}: {stderr}"))
+                else:
+                    completed_videos += 1
+                
+            # Final status update
+            if completed_videos == total_videos:
+                self.message_queue.put(("done",))
+            else:
+                self.message_queue.put(("status", f"Completed {completed_videos} of {total_videos} videos"))
+                
+        except Exception as e:
+            self.message_queue.put(("error", str(e)))
+        finally:
+            self.message_queue.put(("progress", 100))
+            self.download_button.config(state="normal")
+            self.fetch_button.config(state="normal")
+            self.channel_fetch_button.config(state="normal")
         
     def download_components_thread(self, url, tasks, save_dir):
         try:
@@ -594,6 +1011,7 @@ class YTDLP_GUI:
         self.update_status("Ready")
         self.download_button.config(state="normal")
         self.fetch_button.config(state="normal")
+        self.channel_fetch_button.config(state="normal")
 
 if __name__ == "__main__":
     root = tk.Tk()
