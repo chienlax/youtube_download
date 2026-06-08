@@ -22,11 +22,6 @@ class YtDlpGui:
         self.video_mode = tk.StringVar(value="video") # video | audio
         self.video_info = tk.StringVar(value="No video fetched")
         
-        # Playlist Variables
-        self.playlist_url = tk.StringVar()
-        self.playlist_mode = tk.StringVar(value="video") # video | audio
-        self.playlist_data = [] # Stores (id, title, url)
-        
         # Channel Variables
         self.channel_url = tk.StringVar()
         self.channel_mode = tk.StringVar(value="video") # video | audio
@@ -56,7 +51,8 @@ class YtDlpGui:
         
         ttk.Label(config_frame, text="yt-dlp Path:").pack(side="left", padx=5)
         ttk.Entry(config_frame, textvariable=self.yt_dlp_path, width=40).pack(side="left", padx=5)
-        ttk.Button(config_frame, text="Browse", command=self._browse_exe).pack(side="left")
+        ttk.Button(config_frame, text="Browse", command=self._browse_exe).pack(side="left", padx=2)
+        ttk.Button(config_frame, text="Update yt-dlp", command=lambda: self._start_thread(self._update_yt_dlp)).pack(side="left", padx=2)
         
         ttk.Label(config_frame, text="Save To:").pack(side="left", padx=10)
         ttk.Entry(config_frame, textvariable=self.download_path, width=40).pack(side="left", padx=5)
@@ -71,15 +67,10 @@ class YtDlpGui:
         self.notebook.add(self.tab_video, text="Video Download")
         self._build_video_tab(self.tab_video)
 
-        # Tab 2: Playlist
-        self.tab_playlist = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tab_playlist, text="Playlist Download")
-        self._build_list_tab(self.tab_playlist, "playlist")
-
-        # Tab 3: Channel
+        # Tab 2: Channel
         self.tab_channel = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.tab_channel, text="Channel Download")
-        self._build_list_tab(self.tab_channel, "channel")
+        self._build_channel_tab(self.tab_channel)
 
         # 3. Status Bar
         status_frame = ttk.Frame(self.root, padding=5)
@@ -109,17 +100,13 @@ class YtDlpGui:
         
         ttk.Button(action_frame, text="Download Video", command=lambda: self._start_thread(self._download_video)).pack(side="right", padx=10)
 
-    def _build_list_tab(self, parent, mode):
-        # Determine vars based on mode
-        url_var = self.playlist_url if mode == "playlist" else self.channel_url
-        mode_var = self.playlist_mode if mode == "playlist" else self.channel_mode
-        
+    def _build_channel_tab(self, parent):
         # Input
         input_frame = ttk.Frame(parent)
         input_frame.pack(fill="x", pady=10)
-        ttk.Label(input_frame, text=f"{mode.capitalize()} URL:").pack(side="left")
-        ttk.Entry(input_frame, textvariable=url_var, width=60).pack(side="left", padx=5)
-        ttk.Button(input_frame, text="Fetch List", command=lambda: self._start_thread(lambda: self._fetch_list(mode))).pack(side="left")
+        ttk.Label(input_frame, text="Channel URL:").pack(side="left")
+        ttk.Entry(input_frame, textvariable=self.channel_url, width=60).pack(side="left", padx=5)
+        ttk.Button(input_frame, text="Fetch List", command=lambda: self._start_thread(self._fetch_channel)).pack(side="left")
 
         # Treeview
         tree_frame = ttk.Frame(parent)
@@ -140,11 +127,7 @@ class YtDlpGui:
         tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Store tree ref
-        if mode == "playlist":
-            self.playlist_tree = tree
-        else:
-            self.channel_tree = tree
+        self.channel_tree = tree
 
         # Controls
         ctrl_frame = ttk.Frame(parent)
@@ -158,10 +141,10 @@ class YtDlpGui:
         action_frame.pack(fill="x", pady=10)
         
         ttk.Label(action_frame, text="Batch Format:").pack(side="left")
-        ttk.Radiobutton(action_frame, text="Best Video+Audio", variable=mode_var, value="video").pack(side="left", padx=10)
-        ttk.Radiobutton(action_frame, text="Best Audio (MP3)", variable=mode_var, value="audio").pack(side="left")
+        ttk.Radiobutton(action_frame, text="Best Video+Audio", variable=self.channel_mode, value="video").pack(side="left", padx=10)
+        ttk.Radiobutton(action_frame, text="Best Audio (MP3)", variable=self.channel_mode, value="audio").pack(side="left")
         
-        ttk.Button(action_frame, text="Download Selected", command=lambda: self._start_thread(lambda: self._download_batch(mode))).pack(side="right", padx=10)
+        ttk.Button(action_frame, text="Download Selected", command=lambda: self._start_thread(self._download_channel)).pack(side="right", padx=10)
 
     # --- Helpers ---
     def _browse_exe(self):
@@ -177,6 +160,27 @@ class YtDlpGui:
 
     def _start_thread(self, target):
         threading.Thread(target=target, daemon=True).start()
+
+    def _update_yt_dlp(self):
+        exe = self.yt_dlp_path.get()
+        if not exe:
+            self.log("No yt-dlp path configured.")
+            messagebox.showerror("Error", "Please configure or browse for the yt-dlp executable first.")
+            return
+
+        self.log("Updating yt-dlp...")
+        try:
+            cmd = [exe, "-U"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+            if proc.returncode == 0:
+                self.log("yt-dlp updated successfully.")
+                messagebox.showinfo("Success", f"yt-dlp updated successfully:\n{proc.stdout}")
+            else:
+                self.log("yt-dlp update failed.")
+                messagebox.showerror("Error", f"yt-dlp update failed:\n{proc.stderr}\n{proc.stdout}")
+        except Exception as e:
+            self.log(f"Exception during update: {str(e)}")
+            messagebox.showerror("Error", f"Exception during update:\n{str(e)}")
     
     def _select_all(self, tree):
         for item in tree.get_children():
@@ -241,23 +245,17 @@ class YtDlpGui:
         except Exception as e:
             self.log(f"Error: {str(e)}")
 
-    # --- List Logic (Playlist/Channel) ---
-    def _fetch_list(self, mode):
-        # Setup references
-        if mode == "playlist":
-            url = self.playlist_url.get().strip()
-            tree = self.playlist_tree
-        else:
-            url = self.channel_url.get().strip()
-            tree = self.channel_tree
-            
+    # --- Channel Logic ---
+    def _fetch_channel(self):
+        url = self.channel_url.get().strip()
+        tree = self.channel_tree
         exe = self.yt_dlp_path.get()
         
         if not url or not exe:
             self.log("Missing configuration.")
             return
 
-        self.log(f"Fetching {mode} list...")
+        self.log("Fetching channel list...")
         
         # Clear tree
         for item in tree.get_children():
@@ -278,7 +276,6 @@ class YtDlpGui:
                 if not line.strip(): continue
                 try:
                     entry = json.loads(line)
-                    # For flat playlist, we usually get 'id', 'title', 'url' (sometimes)
                     vid_id = entry.get('id')
                     title = entry.get('title', 'Unknown')
                     
@@ -293,13 +290,9 @@ class YtDlpGui:
         except Exception as e:
             self.log(f"Exception: {str(e)}")
 
-    def _download_batch(self, mode):
-        if mode == "playlist":
-            tree = self.playlist_tree
-            fmt_mode = self.playlist_mode.get()
-        else:
-            tree = self.channel_tree
-            fmt_mode = self.channel_mode.get()
+    def _download_channel(self):
+        tree = self.channel_tree
+        fmt_mode = self.channel_mode.get()
 
         selected = tree.selection()
         if not selected:
@@ -323,7 +316,6 @@ class YtDlpGui:
             self.root.update_idletasks() # Force UI update
 
             # Build URL
-            # Standard youtube URL logic
             vid_url = f"https://www.youtube.com/watch?v={vid_id}"
 
             cmd = [exe, "-P", path]
@@ -338,8 +330,6 @@ class YtDlpGui:
             cmd.append(vid_url)
 
             try:
-                # We can subprocess.run here. Since this is already in a thread, it won't block UI.
-                # However, loop is sequential.
                 proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
                 
                 if proc.returncode == 0:

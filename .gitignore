@@ -1,2 +1,4 @@
 ffmpeg-8.0.1/
 data/
+__pycache__/
+*.exe.old
