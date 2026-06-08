@@ -2,3 +2,15 @@ ffmpeg-8.0.1/
 data/
 __pycache__/
 *.exe.old
+*.mp4
+*.webm
+
+# Python
+venv/
+*.pyc
+backend/__pycache__/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/node_modules/
