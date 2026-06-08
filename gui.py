@@ -27,6 +27,11 @@ class YtDlpGui:
         self.channel_mode = tk.StringVar(value="video") # video | audio
         self.channel_data = []
 
+        # Default Format Settings
+        self.default_res = tk.StringVar(value="Best")
+        self.default_codec = tk.StringVar(value="Best (Auto)")
+        self.available_formats = [("Use Defaults (Configured above)", None, None)]
+
         # Auto-detect yt-dlp
         yt_dlp_bin = shutil.which("yt-dlp") or shutil.which("yt-dlp.exe")
         if yt_dlp_bin:
@@ -54,14 +59,30 @@ class YtDlpGui:
         config_frame = ttk.LabelFrame(self.root, text="Global Configuration", padding=5)
         config_frame.pack(fill="x", padx=5, pady=5)
         
-        ttk.Label(config_frame, text="yt-dlp Path:").pack(side="left", padx=5)
-        ttk.Entry(config_frame, textvariable=self.yt_dlp_path, width=40).pack(side="left", padx=5)
-        ttk.Button(config_frame, text="Browse", command=self._browse_exe).pack(side="left", padx=2)
-        ttk.Button(config_frame, text="Update yt-dlp", command=lambda: self._start_thread(self._update_yt_dlp)).pack(side="left", padx=2)
+        # Row 1: Paths
+        row1 = ttk.Frame(config_frame)
+        row1.pack(fill="x", pady=2)
         
-        ttk.Label(config_frame, text="Save To:").pack(side="left", padx=10)
-        ttk.Entry(config_frame, textvariable=self.download_path, width=40).pack(side="left", padx=5)
-        ttk.Button(config_frame, text="Browse", command=self._browse_dir).pack(side="left")
+        ttk.Label(row1, text="yt-dlp Path:").pack(side="left", padx=5)
+        ttk.Entry(row1, textvariable=self.yt_dlp_path, width=40).pack(side="left", padx=5)
+        ttk.Button(row1, text="Browse", command=self._browse_exe).pack(side="left", padx=2)
+        ttk.Button(row1, text="Update yt-dlp", command=lambda: self._start_thread(self._update_yt_dlp)).pack(side="left", padx=2)
+        
+        ttk.Label(row1, text="Save To:").pack(side="left", padx=10)
+        ttk.Entry(row1, textvariable=self.download_path, width=40).pack(side="left", padx=5)
+        ttk.Button(row1, text="Browse", command=self._browse_dir).pack(side="left")
+
+        # Row 2: Default Format Settings
+        row2 = ttk.Frame(config_frame)
+        row2.pack(fill="x", pady=2)
+        
+        ttk.Label(row2, text="Default Resolution:").pack(side="left", padx=5)
+        self.default_res_combo = ttk.Combobox(row2, textvariable=self.default_res, values=["Best", "2160p (4K)", "1440p (2K)", "1080p", "720p", "480p", "360p"], width=15, state="readonly")
+        self.default_res_combo.pack(side="left", padx=5)
+        
+        ttk.Label(row2, text="Default Format/Codec:").pack(side="left", padx=10)
+        self.default_codec_combo = ttk.Combobox(row2, textvariable=self.default_codec, values=["Best (Auto)", "MP4 (H.264/AAC preferred)", "WebM (VP9/Opus preferred)"], width=28, state="readonly")
+        self.default_codec_combo.pack(side="left", padx=5)
 
         # 2. Tabs
         self.notebook = ttk.Notebook(self.root)
@@ -99,9 +120,15 @@ class YtDlpGui:
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill="x", pady=10)
         
-        ttk.Label(action_frame, text="Download Format:").pack(side="left")
-        ttk.Radiobutton(action_frame, text="Best Video+Audio", variable=self.video_mode, value="video").pack(side="left", padx=10)
+        ttk.Label(action_frame, text="Download Mode:").pack(side="left")
+        ttk.Radiobutton(action_frame, text="Video+Audio", variable=self.video_mode, value="video").pack(side="left", padx=10)
         ttk.Radiobutton(action_frame, text="Best Audio (MP3)", variable=self.video_mode, value="audio").pack(side="left")
+        
+        ttk.Label(action_frame, text="Specific Resolution:").pack(side="left", padx=(20, 5))
+        self.format_combobox = ttk.Combobox(action_frame, width=35, state="readonly")
+        self.format_combobox.pack(side="left", padx=5)
+        self.format_combobox['values'] = ["Use Defaults (Configured above)"]
+        self.format_combobox.current(0)
         
         ttk.Button(action_frame, text="Download Video", command=lambda: self._start_thread(self._download_video)).pack(side="right", padx=10)
 
@@ -186,6 +213,35 @@ class YtDlpGui:
         except Exception as e:
             self.log(f"Exception during update: {str(e)}")
             messagebox.showerror("Error", f"Exception during update:\n{str(e)}")
+
+    def _get_format_selector(self, res_val, codec_val):
+        # Parse height
+        height_limit = ""
+        if "2160p" in res_val:
+            height_limit = "[height<=2160]"
+        elif "1440p" in res_val:
+            height_limit = "[height<=1440]"
+        elif "1080p" in res_val:
+            height_limit = "[height<=1080]"
+        elif "720p" in res_val:
+            height_limit = "[height<=720]"
+        elif "480p" in res_val:
+            height_limit = "[height<=480]"
+        elif "360p" in res_val:
+            height_limit = "[height<=360]"
+
+        # Format string based on codec selection
+        if "MP4" in codec_val:
+            fmt = f"bv*{height_limit}[ext=mp4]+ba[ext=m4a]/bv*{height_limit}+ba/b"
+            merge_fmt = "mp4"
+        elif "WebM" in codec_val:
+            fmt = f"bv*{height_limit}[ext=webm]+ba[ext=webm]/bv*{height_limit}+ba/b"
+            merge_fmt = "webm"
+        else: # Best (Auto)
+            fmt = f"bv*{height_limit}+ba/b"
+            merge_fmt = None
+            
+        return fmt, merge_fmt
     
     def _select_all(self, tree):
         for item in tree.get_children():
@@ -202,6 +258,11 @@ class YtDlpGui:
             self.log("Error: Missing URL or yt-dlp path")
             return
 
+        # Reset format combobox
+        self.available_formats = [("Use Defaults (Configured above)", None, None)]
+        self.format_combobox['values'] = ["Use Defaults (Configured above)"]
+        self.format_combobox.current(0)
+
         self.log("Fetching video info...")
         try:
             cmd = [exe] + self.js_args + ["--dump-json", "--no-warnings", url]
@@ -212,6 +273,49 @@ class YtDlpGui:
                 duration = data.get('duration_string', 'Unknown')
                 uploader = data.get('uploader', 'Unknown')
                 self.video_info.set(f"Title: {title}\nDuration: {duration}\nChannel: {uploader}")
+                
+                # Parse formats
+                formats = data.get('formats', [])
+                video_options_raw = []
+                seen_resolutions = set()
+                
+                for f in formats:
+                    vcodec = f.get('vcodec')
+                    if not vcodec or vcodec == 'none':
+                        continue
+                    height = f.get('height')
+                    if not height:
+                        continue
+                    ext = f.get('ext', '')
+                    fps = f.get('fps', 0) or 0
+                    
+                    res_key = (height, ext, fps)
+                    if res_key in seen_resolutions:
+                        continue
+                    seen_resolutions.add(res_key)
+                    
+                    fps_label = f"@{fps}fps" if fps and fps > 30 else ""
+                    vcodec_name = vcodec.split('.')[0] if vcodec else 'unknown'
+                    display = f"{height}p{fps_label} ({ext}) - {vcodec_name}"
+                    
+                    video_options_raw.append({
+                        "height": height,
+                        "fps": fps,
+                        "ext": ext,
+                        "display": display,
+                        "format_id": f.get('format_id')
+                    })
+                
+                # Sort by height desc, then fps desc
+                video_options_raw.sort(key=lambda x: (x['height'], x['fps']), reverse=True)
+                
+                # Convert to display list
+                for opt in video_options_raw:
+                    self.available_formats.append((opt['display'], opt['format_id'], opt['ext']))
+                    
+                self.format_combobox['values'] = [opt[0] for opt in self.available_formats]
+                self.format_combobox.current(0)
+                
                 self.log("Video info fetched.")
             else:
                 self.log("Error fetching video info.")
@@ -235,7 +339,21 @@ class YtDlpGui:
         if mode == "audio":
             cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
         else:
-            cmd.extend(["-f", "bv+ba/b"])
+            selected_idx = self.format_combobox.current()
+            # Check if user selected a specific format or wants defaults
+            if selected_idx > 0:
+                _, format_id, ext = self.available_formats[selected_idx]
+                cmd.extend(["-f", f"{format_id}+bestaudio/best"])
+                if ext:
+                    cmd.extend(["--merge-output-format", ext])
+            else:
+                # Use default settings
+                res_val = self.default_res.get()
+                codec_val = self.default_codec.get()
+                fmt, merge_fmt = self._get_format_selector(res_val, codec_val)
+                cmd.extend(["-f", fmt])
+                if merge_fmt:
+                    cmd.extend(["--merge-output-format", merge_fmt])
         
         cmd.append(url)
 
@@ -330,7 +448,12 @@ class YtDlpGui:
             if fmt_mode == "audio":
                 cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
             else:
-                cmd.extend(["-f", "bv+ba/b"])
+                res_val = self.default_res.get()
+                codec_val = self.default_codec.get()
+                fmt, merge_fmt = self._get_format_selector(res_val, codec_val)
+                cmd.extend(["-f", fmt])
+                if merge_fmt:
+                    cmd.extend(["--merge-output-format", merge_fmt])
             
             cmd.append(vid_url)
 
