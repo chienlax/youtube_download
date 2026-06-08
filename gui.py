@@ -42,6 +42,11 @@ class YtDlpGui:
         elif shutil.which("ffmpeg"):
             self.ffmpeg_path = shutil.which("ffmpeg")
 
+        # Detect JS runtime to avoid YouTube extraction warnings/failures
+        self.js_args = []
+        if shutil.which("node"):
+            self.js_args = ["--js-runtimes", "node"]
+
         self._create_ui()
 
     def _create_ui(self):
@@ -199,7 +204,7 @@ class YtDlpGui:
 
         self.log("Fetching video info...")
         try:
-            cmd = [exe, "--dump-json", "--no-warnings", url]
+            cmd = [exe] + self.js_args + ["--dump-json", "--no-warnings", url]
             res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
             if res.returncode == 0:
                 data = json.loads(res.stdout)
@@ -223,7 +228,7 @@ class YtDlpGui:
         if not url or not exe: return
 
         self.log("Downloading...")
-        cmd = [exe, "-P", path, "--no-playlist"]
+        cmd = [exe] + self.js_args + ["--no-part", "-P", path, "--no-playlist"]
         if self.ffmpeg_path:
             cmd.extend(["--ffmpeg-location", self.ffmpeg_path])
             
@@ -263,7 +268,7 @@ class YtDlpGui:
             
         try:
             # --flat-playlist is key for speed
-            cmd = [exe, "--dump-json", "--flat-playlist", "--no-warnings", url]
+            cmd = [exe] + self.js_args + ["--dump-json", "--flat-playlist", "--no-warnings", url]
             res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
             
             if res.returncode != 0:
@@ -318,7 +323,7 @@ class YtDlpGui:
             # Build URL
             vid_url = f"https://www.youtube.com/watch?v={vid_id}"
 
-            cmd = [exe, "-P", path]
+            cmd = [exe] + self.js_args + ["--no-part", "-P", path]
             if self.ffmpeg_path:
                 cmd.extend(["--ffmpeg-location", self.ffmpeg_path])
                 
