@@ -18,6 +18,7 @@ interface UseDownloadReturn {
     subtitles: string[];
     title: string;
     thumbnail: string | null;
+    mergeFormat?: string | null;
   }) => void;
   reset: () => void;
 }
@@ -44,6 +45,7 @@ export function useDownload(): UseDownloadReturn {
       subtitles: string[];
       title: string;
       thumbnail: string | null;
+      mergeFormat?: string | null;
     }) => {
       reset();
       setIsDownloading(true);

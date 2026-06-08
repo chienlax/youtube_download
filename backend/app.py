@@ -58,8 +58,9 @@ def api_download():
     format_id = body.get("formatId")
     mode = body.get("mode", "video")
     subtitle_langs = body.get("subtitles", [])
+    merge_format = body.get("mergeFormat")
 
-    download_id = start_download(url, format_id, mode, subtitle_langs)
+    download_id = start_download(url, format_id, mode, subtitle_langs, merge_format)
 
     # Store metadata for history recording once download completes
     _pending_meta[download_id] = {

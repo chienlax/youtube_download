@@ -145,6 +145,7 @@ def start_download(
     format_id: str | None = None,
     mode: str = "video",
     subtitle_langs: list[str] | None = None,
+    merge_format: str | None = None,
 ) -> str:
     """
     Begin a download in a background thread.
@@ -163,7 +164,12 @@ def start_download(
         "error": None,
     }
 
-    thread = Thread(target=_run_download, args=(download_id, url, format_id, mode, subtitle_langs), daemon=True)
+    thread = Thread(
+        target=_run_download,
+        args=(download_id, url, format_id, mode, subtitle_langs),
+        kwargs={"merge_format": merge_format},
+        daemon=True,
+    )
     thread.start()
     return download_id
 
@@ -196,12 +202,13 @@ def _run_download(
     format_id: str | None,
     mode: str,
     subtitle_langs: list[str] | None,
+    merge_format: str | None = None,
 ) -> None:
     """Execute yt-dlp and stream progress updates into ``_active_downloads``."""
     state = _active_downloads[download_id]
     state["status"] = "downloading"
 
-    cmd = [YT_DLP] + JS_ARGS + ["--newline", "--no-part", "-P", str(DATA_DIR), "--no-playlist"]
+    cmd = [YT_DLP] + JS_ARGS + ["--newline", "--no-part", "-P", str(DATA_DIR), "--no-playlist", "--ignore-errors"]
 
     if FFMPEG:
         cmd.extend(["--ffmpeg-location", FFMPEG])
@@ -211,6 +218,8 @@ def _run_download(
     else:
         if format_id:
             cmd.extend(["-f", f"{format_id}+bestaudio/best"])
+            if merge_format:
+                cmd.extend(["--merge-output-format", merge_format])
         else:
             cmd.extend(["-f", "bv*+ba/b"])
 
@@ -236,30 +245,32 @@ def _run_download(
             errors="ignore",
         )
 
+        output_lines = []
         for line in proc.stdout:  # type: ignore[union-attr]
-            line = line.strip()
-            if not line:
+            line_stripped = line.strip()
+            if not line_stripped:
                 continue
+            output_lines.append(line_stripped)
 
-            m = _PROGRESS_RE.search(line)
+            m = _PROGRESS_RE.search(line_stripped)
             if m:
                 state["progress"] = float(m.group("pct"))
                 state["speed"] = m.group("speed")
                 state["eta"] = m.group("eta")
                 continue
 
-            m = _DEST_RE.search(line)
+            m = _DEST_RE.search(line_stripped)
             if m:
                 state["filename"] = os.path.basename(m.group(1))
                 continue
 
-            m = _MERGE_RE.search(line)
+            m = _MERGE_RE.search(line_stripped)
             if m:
                 state["filename"] = os.path.basename(m.group(1))
                 state["status"] = "merging"
                 continue
 
-            m = _ALREADY_RE.search(line)
+            m = _ALREADY_RE.search(line_stripped)
             if m:
                 state["filename"] = os.path.basename(m.group(1))
                 state["progress"] = 100
@@ -272,7 +283,9 @@ def _run_download(
             state["progress"] = 100
         else:
             state["status"] = "failed"
-            state["error"] = "yt-dlp exited with a non-zero code"
+            error_details = "\n".join(output_lines[-10:])  # last 10 lines of output
+            state["error"] = f"yt-dlp exited with code {proc.returncode}. Output:\n{error_details}"
+            print(f"Download failed with output:\n" + "\n".join(output_lines))
 
     except Exception as exc:
         state["status"] = "failed"

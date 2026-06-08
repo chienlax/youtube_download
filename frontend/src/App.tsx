@@ -3,6 +3,7 @@ import Header from "./components/Header";
 import UrlInput from "./components/UrlInput";
 import VideoCard from "./components/VideoCard";
 import FormatPicker from "./components/FormatPicker";
+import SubtitlePicker from "./components/SubtitlePicker";
 import DownloadButton from "./components/DownloadButton";
 import ProgressBar from "./components/ProgressBar";
 import HistoryPanel from "./components/HistoryPanel";
@@ -62,8 +63,8 @@ export default function App() {
   const [selectedFormatId, setSelectedFormatId] = useState<string | null>(null);
   const [mode, setMode] = useState<DownloadMode>("video");
 
-  // English subtitle auto-detected from metadata
-  const [englishSub, setEnglishSub] = useState<string | null>(null);
+  // Selected subtitle codes
+  const [selectedSubtitles, setSelectedSubtitles] = useState<string[]>([]);
 
   // Download
   const { progress, isDownloading, startDownload, reset } = useDownload();
@@ -77,7 +78,7 @@ export default function App() {
       setFetchError(null);
       setVideoInfo(null);
       setSelectedFormatId(null);
-      setEnglishSub(null);
+      setSelectedSubtitles([]);
 
       try {
         const res = await fetch(
@@ -92,7 +93,9 @@ export default function App() {
 
         // Auto-detect English subtitles
         const enCode = findEnglishSub(data.subtitles || []);
-        setEnglishSub(enCode);
+        if (enCode) {
+          setSelectedSubtitles([enCode]);
+        }
       } catch (err) {
         setFetchError(
           err instanceof Error ? err.message : "An unknown error occurred"
@@ -107,15 +110,21 @@ export default function App() {
   const handleDownload = useCallback(() => {
     if (!videoInfo) return;
 
+    const selectedFormat = videoInfo.formats.find(
+      (f) => f.formatId === selectedFormatId
+    );
+    const mergeFormat = selectedFormat ? selectedFormat.ext : null;
+
     startDownload({
       url: videoInfo.url,
       formatId: mode === "audio" ? null : selectedFormatId,
       mode,
-      subtitles: englishSub ? [englishSub] : [],
+      subtitles: selectedSubtitles,
       title: videoInfo.title,
       thumbnail: videoInfo.thumbnail,
+      mergeFormat,
     });
-  }, [videoInfo, selectedFormatId, mode, englishSub, startDownload]);
+  }, [videoInfo, selectedFormatId, mode, selectedSubtitles, startDownload]);
 
   return (
     <>
@@ -152,21 +161,19 @@ export default function App() {
           <>
             <VideoCard info={videoInfo} />
 
-            <FormatPicker
-              formats={videoInfo.formats}
-              selectedFormatId={selectedFormatId}
-              onSelect={setSelectedFormatId}
-            />
+            <div className="options-row">
+              <FormatPicker
+                formats={videoInfo.formats}
+                selectedFormatId={selectedFormatId}
+                onSelect={setSelectedFormatId}
+              />
 
-            {/* English subtitle status indicator */}
-            {englishSub && (
-              <div className="sub-indicator">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                English subtitles will be downloaded (.srt)
-              </div>
-            )}
+              <SubtitlePicker
+                subtitles={videoInfo.subtitles || []}
+                selected={selectedSubtitles}
+                onChange={setSelectedSubtitles}
+              />
+            </div>
 
             {progress ? (
               <ProgressBar progress={progress} />
